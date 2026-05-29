@@ -74,21 +74,33 @@ def try_parse_avito(url):
         # ===== НАЗВАНИЕ =====
         title = None
         
-        # Способ 1: og:title
+        # Способ 1: og:title (но фильтруем "Авито")
         og_title = soup.find('meta', property='og:title')
         if og_title and og_title.get('content'):
-            title = og_title['content'].strip()
+            og_content = og_title['content'].strip()
+            # Пропускаем если это общее название Авито
+            if 'Авито' not in og_content or 'Объявления' not in og_content:
+                title = og_content
         
-        # Способ 2: title тег
+        # Способ 2: Из URL (самый надёжный)
+        if not title:
+            # Достаём название из URL: avito.ru/.../ferrari_california_4.3_amt_2010_...
+            parts = url.split('/')
+            if len(parts) > 5:
+                car_part = parts[-1].split('?')[0]  # убираем всё после ?
+                car_part = car_part.replace('_', ' ').title()
+                # Убираем ID в конце если есть
+                car_part = re.sub(r'\s+\d{10,}\s*$', '', car_part)
+                title = car_part
+        
+        # Способ 3: title тег страницы
         if not title:
             title_tag = soup.find('title')
             if title_tag:
                 title_text = title_tag.get_text()
-                title_text = title_text.replace(' купить в Москве на Avito', '').strip()
-                title_text = title_text.replace(' купить в Санкт-Петербурге на Avito', '').strip()
-                title_text = title_text.replace(' купить во Владивостоке на Avito', '').strip()
-                title_text = re.sub(r'\s*на Avito$', '', title_text)
-                if title_text:
+                title_text = re.sub(r'\s*купить.*на Avito.*', '', title_text)
+                title_text = title_text.strip()
+                if title_text and 'Авито' not in title_text:
                     title = title_text
         
         # ===== ЦЕНА =====
@@ -149,22 +161,30 @@ def try_parse_avito(url):
         
         # ===== ФОТО =====
         photo_url = None
-        # Способ 1: og:image
-        og_image = soup.find('meta', property='og:image')
-        if og_image and og_image.get('content'):
-            photo_url = og_image['content']
         
-        # Способ 2: Первое фото из галереи
+        # Способ 1: Ищем большое фото (не лого)
+        for img in soup.find_all('img'):
+            src = img.get('src') or img.get('data-src') or ''
+            # Фото товара обычно содержат "upload" или "image" и большие размеры
+            if ('avito' in src or 'upload' in src or 'image' in src) and not src.endswith('.svg'):
+                if 'logo' not in src.lower() and 'avatar' not in src.lower() and 'favicon' not in src.lower():
+                    if len(src) > 50:  # Обычно фото имеют длинный URL
+                        photo_url = src
+                        break
+        
+        # Способ 2: og:image (но не лого)
         if not photo_url:
-            img_tag = soup.find('img', {'class': re.compile('photo')})
-            if img_tag and img_tag.get('src'):
-                photo_url = img_tag['src']
+            og_image = soup.find('meta', property='og:image')
+            if og_image and og_image.get('content'):
+                og_img = og_image['content']
+                if 'logo' not in og_img.lower() and 'avatar' not in og_img.lower():
+                    photo_url = og_img
         
-        # Способ 3: Любое большое изображение
+        # Способ 3: Первое большое фото
         if not photo_url:
             for img in soup.find_all('img'):
-                src = img.get('src') or img.get('data-src')
-                if src and 'avito' in src and not src.endswith('.svg'):
+                src = img.get('src') or img.get('data-src') or ''
+                if src and 'http' in src and len(src) > 50:
                     photo_url = src
                     break
         

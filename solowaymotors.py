@@ -27,12 +27,23 @@ def init_db():
             year TEXT,
             mileage TEXT,
             engine TEXT,
+            horsepower TEXT,
             transmission TEXT,
             location TEXT,
+            photo_url TEXT,
             folder TEXT,
             date_added TEXT
         )
     """)
+    # Добавляем колонки если их нет (для старых баз)
+    try:
+        c.execute("ALTER TABLE cars ADD COLUMN horsepower TEXT")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE cars ADD COLUMN photo_url TEXT")
+    except:
+        pass
     conn.commit()
     conn.close()
 
@@ -108,6 +119,12 @@ def try_parse_avito(url):
         if engine_match:
             engine = f"{engine_match.group(1)} л"
         
+        # ===== ЛОШАДИНЫЕ СИЛЫ =====
+        horsepower = None
+        hp_match = re.search(r'(\d{2,4})\s*(?:л\.?с\.?|лошадиных сил|лошадок|лошади)', text)
+        if hp_match:
+            horsepower = f"{hp_match.group(1)} л.с."
+        
         # ===== КОРОБКА =====
         transmission = None
         if 'AT' in url or 'автомат' in text.lower():
@@ -130,6 +147,27 @@ def try_parse_avito(url):
             loc = location_match.group(1)
             location = cities.get(loc, loc.replace('-', ' ').title())
         
+        # ===== ФОТО =====
+        photo_url = None
+        # Способ 1: og:image
+        og_image = soup.find('meta', property='og:image')
+        if og_image and og_image.get('content'):
+            photo_url = og_image['content']
+        
+        # Способ 2: Первое фото из галереи
+        if not photo_url:
+            img_tag = soup.find('img', {'class': re.compile('photo')})
+            if img_tag and img_tag.get('src'):
+                photo_url = img_tag['src']
+        
+        # Способ 3: Любое большое изображение
+        if not photo_url:
+            for img in soup.find_all('img'):
+                src = img.get('src') or img.get('data-src')
+                if src and 'avito' in src and not src.endswith('.svg'):
+                    photo_url = src
+                    break
+        
         if title:
             return {
                 'title': title,
@@ -137,8 +175,10 @@ def try_parse_avito(url):
                 'year': year or '',
                 'mileage': mileage or '',
                 'engine': engine or '',
+                'horsepower': horsepower or '',
                 'transmission': transmission or '',
-                'location': location or ''
+                'location': location or '',
+                'photo_url': photo_url or ''
             }
         
     except Exception as e:
@@ -179,7 +219,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_car(update: Update, context: ContextTypes.DEFAULT_TYPE, folder, index=0):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, url, title, price, year, mileage, engine, transmission, location FROM cars WHERE folder = ? ORDER BY id", (folder,))
+    c.execute("SELECT id, url, title, price, year, mileage, engine, horsepower, transmission, location, photo_url FROM cars WHERE folder = ? ORDER BY id", (folder,))
     rows = c.fetchall()
     conn.close()
 
@@ -197,7 +237,7 @@ async def show_car(update: Update, context: ContextTypes.DEFAULT_TYPE, folder, i
     if index >= len(rows):
         index = len(rows) - 1
 
-    car_id, url, title, price, year, mileage, engine, transmission, location = rows[index]
+    car_id, url, title, price, year, mileage, engine, horsepower, transmission, location, photo_url = rows[index]
     context.user_data[f"car_{folder}"] = index
 
     caption = f"🚗 <a href='{url}'>{title}</a>\n"
@@ -210,6 +250,8 @@ async def show_car(update: Update, context: ContextTypes.DEFAULT_TYPE, folder, i
         caption += f"🛣 {mileage}\n"
     if engine:
         caption += f"⚙️ {engine}\n"
+    if horsepower:
+        caption += f"🐎 {horsepower}\n"
     if transmission:
         caption += f"🕹 {transmission}\n"
     if location:
@@ -228,6 +270,21 @@ async def show_car(update: Update, context: ContextTypes.DEFAULT_TYPE, folder, i
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Отправляем фото если есть
+    if photo_url:
+        try:
+            await update.callback_query.message.delete()
+            await update.effective_chat.send_photo(
+                photo=photo_url,
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
+            return
+        except:
+            pass
+    
     await update.callback_query.edit_message_text(caption, reply_markup=reply_markup, parse_mode="HTML")
 
 async def car_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -304,10 +361,11 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("""
-            INSERT INTO cars (url, title, price, year, mileage, engine, transmission, location, folder, date_added)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO cars (url, title, price, year, mileage, engine, horsepower, transmission, location, photo_url, folder, date_added)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (url, parsed['title'], parsed['price'], parsed['year'], parsed['mileage'],
-              parsed['engine'], parsed['transmission'], parsed['location'], folder, datetime.now().isoformat()))
+              parsed['engine'], parsed['horsepower'], parsed['transmission'], parsed['location'],
+              parsed['photo_url'], folder, datetime.now().isoformat()))
         conn.commit()
         conn.close()
         
@@ -321,11 +379,23 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"🛣 {parsed['mileage']}\n"
         if parsed['engine']:
             msg += f"⚙️ {parsed['engine']}\n"
+        if parsed['horsepower']:
+            msg += f"🐎 {parsed['horsepower']}\n"
         if parsed['transmission']:
             msg += f"🕹 {parsed['transmission']}\n"
         if parsed['location']:
             msg += f"📍 {parsed['location']}\n"
         msg += "\n✅ Добавлено в гараж!"
+        
+        # Отправляем фото если есть
+        if parsed['photo_url']:
+            try:
+                await update.message.reply_photo(photo=parsed['photo_url'], caption=msg)
+                context.user_data["awaiting_url"] = False
+                await show_main_menu(update, context)
+                return
+            except:
+                pass
         
         await update.message.reply_text(msg)
         context.user_data["awaiting_url"] = False

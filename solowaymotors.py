@@ -1,0 +1,400 @@
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+import sqlite3
+from datetime import datetime
+import os
+import requests
+import re
+from bs4 import BeautifulSoup
+
+TOKEN = "8402346986:AAGp4Xgnm8i_VF9AuTLgCflcKOZ1jrfTksE"
+
+# Путь для постоянного хранения
+DB_PATH = "/data/motors.db"
+
+# Создаём папку /data если её нет
+os.makedirs("/data", exist_ok=True)
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS cars (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT,
+            title TEXT,
+            price TEXT,
+            year TEXT,
+            mileage TEXT,
+            engine TEXT,
+            transmission TEXT,
+            location TEXT,
+            folder TEXT,
+            date_added TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+ALLOWED_USERS = {
+    "Соловей": "2011",
+}
+
+def try_parse_avito(url):
+    """
+    Пытается достать данные из Авито
+    Возвращает словарь с данными или None
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        if response.status_code != 200:
+            return None
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        text = soup.get_text()
+        
+        # ===== НАЗВАНИЕ =====
+        title = None
+        
+        # Способ 1: og:title
+        og_title = soup.find('meta', property='og:title')
+        if og_title and og_title.get('content'):
+            title = og_title['content'].strip()
+        
+        # Способ 2: title тег
+        if not title:
+            title_tag = soup.find('title')
+            if title_tag:
+                title_text = title_tag.get_text()
+                title_text = title_text.replace(' купить в Москве на Avito', '').strip()
+                title_text = title_text.replace(' купить в Санкт-Петербурге на Avito', '').strip()
+                title_text = title_text.replace(' купить во Владивостоке на Avito', '').strip()
+                title_text = re.sub(r'\s*на Avito$', '', title_text)
+                if title_text:
+                    title = title_text
+        
+        # ===== ЦЕНА =====
+        price = None
+        price_meta = soup.find('meta', itemprop='price')
+        if price_meta and price_meta.get('content'):
+            price = f"₽{int(float(price_meta['content'])):,}".replace(',', ' ')
+        else:
+            price_match = re.search(r'(\d{1,3}(?:\s*\d{3})*)\s*(?:₽|руб)', text)
+            if price_match:
+                price = f"₽{price_match.group(1)}"
+        
+        # ===== ГОД =====
+        year = None
+        year_match = re.search(r'(\d{4})\s*год', text)
+        if year_match:
+            year = year_match.group(1)
+        
+        # ===== ПРОБЕГ =====
+        mileage = None
+        mileage_match = re.search(r'(\d{1,3}(?:\s*\d{3})*)\s*км', text)
+        if mileage_match:
+            mileage = f"{mileage_match.group(1)} км"
+        
+        # ===== ДВИГАТЕЛЬ =====
+        engine = None
+        engine_match = re.search(r'(\d+\.\d+)\s*л', text)
+        if engine_match:
+            engine = f"{engine_match.group(1)} л"
+        
+        # ===== КОРОБКА =====
+        transmission = None
+        if 'AT' in url or 'автомат' in text.lower():
+            transmission = 'AT'
+        elif 'MT' in url or 'механика' in text.lower():
+            transmission = 'MT'
+        elif 'AMT' in url or 'робот' in text.lower():
+            transmission = 'AMT'
+        
+        # ===== ЛОКАЦИЯ =====
+        location = None
+        location_match = re.search(r'avito\.ru/([^/]+)/', url)
+        if location_match:
+            cities = {
+                'moskva': 'Москва',
+                'sankt-peterburg': 'Санкт-Петербург',
+                'vladivostok': 'Владивосток',
+                'lyubertsy': 'Люберцы',
+            }
+            loc = location_match.group(1)
+            location = cities.get(loc, loc.replace('-', ' ').title())
+        
+        if title:
+            return {
+                'title': title,
+                'price': price or '',
+                'year': year or '',
+                'mileage': mileage or '',
+                'engine': engine or '',
+                'transmission': transmission or '',
+                'location': location or ''
+            }
+        
+    except Exception as e:
+        print(f"Ошибка парсинга: {e}")
+    
+    return None
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if "authenticated" not in context.user_data:
+        await update.message.reply_text("🔐 Привет! Введи свой ник:")
+        context.user_data["awaiting_username"] = True
+        return
+    
+    await show_main_menu(update, context)
+
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("🇩🇪 Немцы", callback_data="folder_Немцы")],
+        [InlineKeyboardButton("🇯🇵 Японцы", callback_data="folder_Японцы")],
+        [InlineKeyboardButton("🇺🇸 Американцы", callback_data="folder_Американцы")],
+        [InlineKeyboardButton("🇬🇧 Англичане", callback_data="folder_Англичане")],
+        [InlineKeyboardButton("🇮🇹 Итальянцы", callback_data="folder_Итальянцы")],
+        [InlineKeyboardButton("🏎 Спорткары", callback_data="folder_Спорткары")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if update.message:
+        await update.message.reply_text(
+            "🏎 SOLOWAY MOTORS\n\n👇 Выбери категорию или кинь ссылку на Авито:",
+            reply_markup=reply_markup
+        )
+    else:
+        await update.callback_query.edit_message_text(
+            "🏎 SOLOWAY MOTORS\n\n👇 Выбери категорию или кинь ссылку на Авито:",
+            reply_markup=reply_markup
+        )
+
+async def show_car(update: Update, context: ContextTypes.DEFAULT_TYPE, folder, index=0):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, url, title, price, year, mileage, engine, transmission, location FROM cars WHERE folder = ? ORDER BY id", (folder,))
+    rows = c.fetchall()
+    conn.close()
+
+    if not rows:
+        keyboard = [[InlineKeyboardButton("➕ Добавить", callback_data=f"add_{folder}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.callback_query.edit_message_text(
+            f"📂 {folder}\n\nПока пусто.",
+            reply_markup=reply_markup
+        )
+        return
+
+    if index < 0:
+        index = 0
+    if index >= len(rows):
+        index = len(rows) - 1
+
+    car_id, url, title, price, year, mileage, engine, transmission, location = rows[index]
+    context.user_data[f"car_{folder}"] = index
+
+    caption = f"🚗 <a href='{url}'>{title}</a>\n"
+    caption += f"━━━━━━━━━━━━━━━\n"
+    if price:
+        caption += f"💰 {price}\n"
+    if year:
+        caption += f"📅 {year} год\n"
+    if mileage:
+        caption += f"🛣 {mileage}\n"
+    if engine:
+        caption += f"⚙️ {engine}\n"
+    if transmission:
+        caption += f"🕹 {transmission}\n"
+    if location:
+        caption += f"📍 {location}\n"
+
+    keyboard = [
+        [InlineKeyboardButton("🔗 Открыть на Авито", url=url)],
+        [
+            InlineKeyboardButton("◀️", callback_data=f"car_{folder}_prev"),
+            InlineKeyboardButton(f"{index + 1}/{len(rows)}", callback_data="noop"),
+            InlineKeyboardButton("▶️", callback_data=f"car_{folder}_next")
+        ],
+        [
+            InlineKeyboardButton("➕ Добавить", callback_data=f"add_{folder}"),
+            InlineKeyboardButton("🗑 Переместить", callback_data=f"move_{car_id}")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.callback_query.edit_message_text(caption, reply_markup=reply_markup, parse_mode="HTML")
+
+async def car_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    parts = data.split("_")
+    folder = parts[1]
+    direction = parts[2]
+    current = context.user_data.get(f"car_{folder}", 0)
+    new_index = current + 1 if direction == "next" else current - 1
+    await show_car(update, context, folder, new_index)
+
+async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    folder = query.data.split("_")[1]
+    context.user_data["add_folder"] = folder
+    context.user_data["awaiting_url"] = True
+    await query.edit_message_text(
+        "🔗 Отправь ссылку на авто с Авито\n\n"
+        "🤖 Я автоматически вытащу все характеристики!",
+        parse_mode="Markdown"
+    )
+
+async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Аутентификация
+    if context.user_data.get("awaiting_username") or context.user_data.get("awaiting_password"):
+        await handle_auth(update, context)
+        return
+    
+    if "authenticated" not in context.user_data:
+        await update.message.reply_text("🔐 Сначала авторизуйся: /start")
+        return
+    
+    if context.user_data.get("awaiting_url"):
+        await handle_url(update, context)
+
+async def handle_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("awaiting_username"):
+        username = update.message.text.strip()
+        if username in ALLOWED_USERS:
+            context.user_data["temp_username"] = username
+            context.user_data["awaiting_username"] = False
+            context.user_data["awaiting_password"] = True
+            await update.message.reply_text("🔑 Введи пароль:")
+        else:
+            await update.message.reply_text("❌ Неверный ник. Попробуй ещё раз:")
+        return
+
+    if context.user_data.get("awaiting_password"):
+        password = update.message.text.strip()
+        username = context.user_data.get("temp_username")
+        if ALLOWED_USERS.get(username) == password:
+            context.user_data["authenticated"] = True
+            context.user_data.pop("temp_username", None)
+            context.user_data.pop("awaiting_password", None)
+            await update.message.reply_text("✅ Доступ разрешён!")
+            await show_main_menu(update, context)
+        else:
+            context.user_data.pop("temp_username", None)
+            context.user_data.pop("awaiting_password", None)
+            context.user_data.pop("awaiting_username", None)
+            await update.message.reply_text("❌ Неверный пароль. Начни заново с /start")
+        return
+
+async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    folder = context.user_data["add_folder"]
+    
+    await update.message.reply_text("🔍 Парсю Авито...")
+    parsed = try_parse_avito(url)
+    
+    if parsed:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO cars (url, title, price, year, mileage, engine, transmission, location, folder, date_added)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (url, parsed['title'], parsed['price'], parsed['year'], parsed['mileage'],
+              parsed['engine'], parsed['transmission'], parsed['location'], folder, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+        
+        msg = f"✅ Найдено:\n"
+        msg += f"🚗 {parsed['title']}\n"
+        if parsed['price']:
+            msg += f"💰 {parsed['price']}\n"
+        if parsed['year']:
+            msg += f"📅 {parsed['year']} год\n"
+        if parsed['mileage']:
+            msg += f"🛣 {parsed['mileage']}\n"
+        if parsed['engine']:
+            msg += f"⚙️ {parsed['engine']}\n"
+        if parsed['transmission']:
+            msg += f"🕹 {parsed['transmission']}\n"
+        if parsed['location']:
+            msg += f"📍 {parsed['location']}\n"
+        msg += "\n✅ Добавлено в гараж!"
+        
+        await update.message.reply_text(msg)
+        context.user_data["awaiting_url"] = False
+        await show_main_menu(update, context)
+    else:
+        await update.message.reply_text("❌ Не удалось распарсить. Проверь ссылку.")
+
+async def ask_move(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    car_id = int(query.data.split("_")[1])
+    context.user_data["move_id"] = car_id
+    keyboard = [
+        [InlineKeyboardButton("🇩🇪 Немцы", callback_data="move_to_Немцы")],
+        [InlineKeyboardButton("🇯🇵 Японцы", callback_data="move_to_Японцы")],
+        [InlineKeyboardButton("🇺🇸 Американцы", callback_data="move_to_Американцы")],
+        [InlineKeyboardButton("🇬🇧 Англичане", callback_data="move_to_Англичане")],
+        [InlineKeyboardButton("🇮🇹 Итальянцы", callback_data="move_to_Итальянцы")],
+        [InlineKeyboardButton("🏎 Спорткары", callback_data="move_to_Спорткары")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text("🗂 Выбери категорию:", reply_markup=reply_markup)
+
+async def move_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if "move_id" not in context.user_data:
+        return
+    car_id = context.user_data.pop("move_id")
+    new_folder = query.data.split("_")[2]
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE cars SET folder = ? WHERE id = ?", (new_folder, car_id))
+    conn.commit()
+    conn.close()
+    await query.edit_message_text(f"✅ Перемещено в «{new_folder}».")
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if "authenticated" not in context.user_data:
+        await query.edit_message_text("🔐 Сначала авторизуйся: /start")
+        return
+
+    if data == "noop":
+        return
+    elif data.startswith("folder_"):
+        folder = data.split("_", 1)[1]
+        await show_car(update, context, folder, 0)
+    elif data.startswith("car_"):
+        await car_nav(update, context)
+    elif data.startswith("add_"):
+        await start_add(update, context)
+    elif data.startswith("move_"):
+        await ask_move(update, context)
+    elif data.startswith("move_to_"):
+        await move_to(update, context)
+
+def main():
+    app = Application.builder().token(TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_messages))
+    
+    print("🏎 Soloway Motors запущен...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()

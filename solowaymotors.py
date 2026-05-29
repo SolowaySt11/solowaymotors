@@ -10,10 +10,10 @@ from bs4 import BeautifulSoup
 TOKEN = "8402346986:AAGp4Xgnm8i_VF9AuTLgCflcKOZ1jrfTksE"
 
 # Путь для постоянного хранения
-DB_PATH = "/data/motors.db"
+DB_PATH = "motors.db"
 
 # Создаём папку /data если её нет
-os.makedirs("/data", exist_ok=True)
+# .makedirs("/data", exist_ok=True)
 
 # ===== БАЗА МАРОК ПО СТРАНАМ =====
 CAR_BRANDS = {

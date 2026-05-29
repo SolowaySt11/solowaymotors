@@ -221,7 +221,8 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🇺🇸 Американцы", callback_data="folder_Американцы")],
         [InlineKeyboardButton("🇬🇧 Англичане", callback_data="folder_Англичане")],
         [InlineKeyboardButton("🇮🇹 Итальянцы", callback_data="folder_Итальянцы")],
-        [InlineKeyboardButton("🏎 Спорткары", callback_data="folder_Спорткары")]
+        [InlineKeyboardButton("🏎 Спорткары", callback_data="folder_Спорткары")],
+        [InlineKeyboardButton("🗑 Сброс базы", callback_data="reset_db")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -286,26 +287,18 @@ async def show_car(update: Update, context: ContextTypes.DEFAULT_TYPE, folder, i
         ],
         [
             InlineKeyboardButton("➕ Добавить", callback_data=f"add_{folder}"),
+            InlineKeyboardButton("📸 Фото", callback_data=f"photo_{car_id}"),
             InlineKeyboardButton("🗑 Переместить", callback_data=f"move_{car_id}")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Отправляем фото если есть
-    if photo_url:
-        try:
-            await update.callback_query.message.delete()
-            await update.effective_chat.send_photo(
-                photo=photo_url,
-                caption=caption,
-                reply_markup=reply_markup,
-                parse_mode="HTML"
-            )
-            return
-        except:
-            pass
-    
-    await update.callback_query.edit_message_text(caption, reply_markup=reply_markup, parse_mode="HTML")
+    # Всегда редактируем сообщение (не удаляем!)
+    await update.callback_query.edit_message_text(
+        caption,
+        reply_markup=reply_markup,
+        parse_mode="HTML"
+    )
 
 async def car_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -467,6 +460,30 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "noop":
         return
+    elif data == "reset_db":
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM cars")
+        conn.commit()
+        conn.close()
+        await query.edit_message_text("🗑 База очищена! Начни заново.")
+    elif data.startswith("photo_"):
+        car_id = int(data.split("_")[1])
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT photo_url, title FROM cars WHERE id = ?", (car_id,))
+        row = c.fetchone()
+        conn.close()
+        if row and row[0]:
+            try:
+                await update.effective_chat.send_photo(
+                    photo=row[0],
+                    caption=f"📸 {row[1]}"
+                )
+            except:
+                await query.answer("❌ Не удалось загрузить фото", show_alert=True)
+        else:
+            await query.answer("❌ Фото не найдено", show_alert=True)
     elif data.startswith("folder_"):
         folder = data.split("_", 1)[1]
         await show_car(update, context, folder, 0)

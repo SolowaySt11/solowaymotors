@@ -12,17 +12,25 @@ TOKEN = "8402346986:AAGp4Xgnm8i_VF9AuTLgCflcKOZ1jrfTksE"
 # Путь для постоянного хранения
 DB_PATH = "/data/motors.db"
 
-# ===== БАЗА МАРОК ПО СТРАНАМ =====
+# ===== БАЗА МАРОК ПО СТРАНАМ (ключи без эмодзи) =====
 CAR_BRANDS = {
-    "🇩🇪 Немцы": ["audi", "bmw", "mercedes", "porsche", "volkswagen", "opel", "maybach", "smart", "mini"],
-    "🇯🇵 Японцы": ["toyota", "nissan", "honda", "mazda", "subaru", "lexus", "infiniti", "suzuki", "mitsubishi", "daihatsu"],
-    "🇺🇸 Американцы": ["ford", "chevrolet", "dodge", "cadillac", "tesla", "jeep", "chrysler", "hummer", "pontiac", "lincoln"],
-    "🇬🇧 Англичане": ["aston martin", "bentley", "rolls-royce", "jaguar", "land rover", "lotus", "mclaren", "mini", "rover", "triumph"],
-    "🇮🇹 Итальянцы": ["ferrari", "lamborghini", "maserati", "alfa romeo", "fiat", "lancia", "pagani", "abarth"],
+    "Немцы": ["audi", "bmw", "mercedes", "porsche", "volkswagen", "opel", "maybach", "smart", "mini"],
+    "Японцы": ["toyota", "nissan", "honda", "mazda", "subaru", "lexus", "infiniti", "suzuki", "mitsubishi", "daihatsu"],
+    "Американцы": ["ford", "chevrolet", "dodge", "cadillac", "tesla", "jeep", "chrysler", "hummer", "pontiac", "lincoln"],
+    "Англичане": ["aston martin", "bentley", "rolls-royce", "jaguar", "land rover", "lotus", "mclaren", "mini", "rover", "triumph"],
+    "Итальянцы": ["ferrari", "lamborghini", "maserati", "alfa romeo", "fiat", "lancia", "pagani", "abarth"],
+}
+
+# Эмодзи для отображения
+FOLDER_EMOJI = {
+    "Немцы": "🇩🇪",
+    "Японцы": "🇯🇵",
+    "Американцы": "🇺🇸",
+    "Англичане": "🇬🇧",
+    "Итальянцы": "🇮🇹",
 }
 
 def init_db():
-    # Создаём папку /data если её нет
     try:
         os.makedirs("/data", exist_ok=True)
     except:
@@ -76,7 +84,7 @@ ALLOWED_USERS = {
 }
 
 def detect_category(title, url):
-    """Определяет категорию по названию или URL"""
+    """Определяет категорию по названию или URL (возвращает чистый ключ)"""
     text_to_check = (title + " " + url).lower()
     
     for category, brands in CAR_BRANDS.items():
@@ -87,10 +95,7 @@ def detect_category(title, url):
     return None
 
 def try_parse_avito(url):
-    """
-    Пытается достать данные из Авито
-    Возвращает словарь с данными или None
-    """
+    # ... (весь код парсинга остаётся без изменений) ...
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -104,9 +109,7 @@ def try_parse_avito(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         text = soup.get_text()
         
-        # ===== НАЗВАНИЕ =====
         title = None
-        
         og_title = soup.find('meta', property='og:title')
         if og_title and og_title.get('content'):
             og_content = og_title['content'].strip()
@@ -130,7 +133,6 @@ def try_parse_avito(url):
                 if title_text and 'Авито' not in title_text:
                     title = title_text
         
-        # ===== ЦЕНА =====
         price = None
         price_meta = soup.find('meta', itemprop='price')
         if price_meta and price_meta.get('content'):
@@ -140,31 +142,26 @@ def try_parse_avito(url):
             if price_match:
                 price = f"₽{price_match.group(1)}"
         
-        # ===== ГОД =====
         year = None
         year_match = re.search(r'(\d{4})\s*год', text)
         if year_match:
             year = year_match.group(1)
         
-        # ===== ПРОБЕГ =====
         mileage = None
         mileage_match = re.search(r'(\d{1,3}(?:\s*\d{3})*)\s*км', text)
         if mileage_match:
             mileage = f"{mileage_match.group(1)} км"
         
-        # ===== ДВИГАТЕЛЬ =====
         engine = None
         engine_match = re.search(r'(\d+\.\d+)\s*л', text)
         if engine_match:
             engine = f"{engine_match.group(1)} л"
         
-        # ===== ЛОШАДИНЫЕ СИЛЫ =====
         horsepower = None
         hp_match = re.search(r'(\d{2,4})\s*(?:л\.?с\.?|лошадиных сил|лошадок|лошади)', text)
         if hp_match:
             horsepower = f"{hp_match.group(1)} л.с."
         
-        # ===== КОРОБКА =====
         transmission = None
         if 'AT' in url or 'автомат' in text.lower():
             transmission = 'AT'
@@ -173,7 +170,6 @@ def try_parse_avito(url):
         elif 'AMT' in url or 'робот' in text.lower():
             transmission = 'AMT'
         
-        # ===== ЛОКАЦИЯ =====
         location = None
         location_match = re.search(r'avito\.ru/([^/]+)/', url)
         if location_match:
@@ -186,9 +182,7 @@ def try_parse_avito(url):
             loc = location_match.group(1)
             location = cities.get(loc, loc.replace('-', ' ').title())
         
-        # ===== ФОТО =====
         photo_url = None
-        
         for img in soup.find_all('img'):
             for attr in ['src', 'data-src', 'data-srcset', 'data-url', 'data-image']:
                 src = img.get(attr, '')
@@ -275,17 +269,21 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def show_car(update: Update, context: ContextTypes.DEFAULT_TYPE, folder, index=0):
+    """Показывает авто из папки. folder — чистый ключ (без эмодзи)"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT id, url, title, price, year, mileage, engine, horsepower, transmission, location, photo_url FROM cars WHERE folder = ? ORDER BY id", (folder,))
     rows = c.fetchall()
     conn.close()
 
+    emoji = FOLDER_EMOJI.get(folder, "")
+    display_name = f"{emoji} {folder}" if emoji else folder
+
     if not rows:
         keyboard = [[InlineKeyboardButton("➕ Добавить", callback_data=f"add_{folder}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.callback_query.edit_message_text(
-            f"📂 {folder}\n\nПока пусто.",
+            f"📂 {display_name}\n\nПока пусто.",
             reply_markup=reply_markup
         )
         return
@@ -314,8 +312,8 @@ async def show_car(update: Update, context: ContextTypes.DEFAULT_TYPE, folder, i
         caption += f"🕹 {transmission}\n"
     if location:
         caption += f"📍 {location}\n"
+    caption += f"\n📂 {display_name}"
 
-    # Индикатор фото
     photo_btn_text = "📸 Фото ✅" if photo_url else "📸 Нет фото ❌"
     photo_btn_callback = f"photo_{car_id}" if photo_url else "noop"
 
@@ -357,8 +355,11 @@ async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["add_folder"] = folder
     context.user_data["awaiting_url"] = True
     
+    emoji = FOLDER_EMOJI.get(folder, "")
+    display_name = f"{emoji} {folder}" if emoji else folder
+    
     await query.message.reply_text(
-        "🔗 Отправь ссылку на авто с Авито\n\n"
+        f"🔗 Отправь ссылку на авто с Авито для папки «{display_name}»\n\n"
         "🤖 Я автоматически вытащу все характеристики!",
         parse_mode="Markdown"
     )
@@ -373,12 +374,10 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔐 Сначала авторизуйся: /start")
         return
     
-    # ВАЖНО: сначала проверяем awaiting_url
     if context.user_data.get("awaiting_url"):
         await handle_url(update, context)
-        return  # <-- выходим
+        return
     
-    # Если не ждём URL — показываем меню
     await show_main_menu(update, context)
 
 async def handle_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -431,8 +430,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       parsed['engine'], parsed['horsepower'], parsed['transmission'], parsed['location'],
                       parsed['photo_url'], folder, datetime.now().isoformat()))
                 conn.commit()
-                
-                # Проверяем что сохранилось
                 c.execute("SELECT COUNT(*) FROM cars")
                 count = c.fetchone()[0]
                 print(f"✅ Сохранено! Записей: {count}, папка: {folder}")
@@ -441,6 +438,9 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"❌ Ошибка сохранения: {e}")
                 await update.message.reply_text(f"❌ Ошибка БД: {e}")
                 return
+            
+            emoji = FOLDER_EMOJI.get(folder, "")
+            display_name = f"{emoji} {folder}" if emoji else folder
             
             msg = f"✅ Найдено:\n"
             msg += f"🚗 {parsed['title']}\n"
@@ -458,7 +458,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += f"🕹 {parsed['transmission']}\n"
             if parsed['location']:
                 msg += f"📍 {parsed['location']}\n"
-            msg += f"\n📂 Авто-категория: {folder}"
+            msg += f"\n📂 Авто-категория: {display_name}"
             msg += "\n✅ Добавлено в гараж!"
             
             if parsed['photo_url']:
@@ -528,7 +528,10 @@ async def move_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("UPDATE cars SET folder = ? WHERE id = ?", (new_folder, car_id))
     conn.commit()
     conn.close()
-    await query.edit_message_text(f"✅ Перемещено в «{new_folder}».")
+    
+    emoji = FOLDER_EMOJI.get(new_folder, "")
+    display_name = f"{emoji} {new_folder}" if emoji else new_folder
+    await query.edit_message_text(f"✅ Перемещено в «{display_name}».")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -558,7 +561,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         await query.edit_message_text("🗑 База очищена! Начни заново.")
     elif data.startswith("choose_"):
-        folder = data.split("_")[1]
+        folder = data.split("_", 1)[1]  # Берём всё после первого "_"
         parsed = context.user_data.get("parsed_data")
         url = context.user_data.get("parsed_url")
         
@@ -577,7 +580,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("parsed_data", None)
             context.user_data.pop("parsed_url", None)
             
-            msg = f"✅ Добавлено в «{folder}»!\n🚗 {parsed['title']}"
+            emoji = FOLDER_EMOJI.get(folder, "")
+            display_name = f"{emoji} {folder}" if emoji else folder
+            
+            msg = f"✅ Добавлено в «{display_name}»!\n🚗 {parsed['title']}"
             await query.edit_message_text(msg)
             
             if parsed['photo_url']:
@@ -618,7 +624,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Фото не найдено", show_alert=True)
     elif data.startswith("folder_"):
-        folder = data.split("_", 1)[1]
+        folder = data.split("_", 1)[1]  # Берём всё после первого "_"
         await show_car(update, context, folder, 0)
     elif data.startswith("car_"):
         await car_nav(update, context)

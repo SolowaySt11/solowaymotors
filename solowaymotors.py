@@ -15,6 +15,15 @@ DB_PATH = "/data/motors.db"
 # Создаём папку /data если её нет
 os.makedirs("/data", exist_ok=True)
 
+# ===== БАЗА МАРОК ПО СТРАНАМ =====
+CAR_BRANDS = {
+    "🇩🇪 Немцы": ["audi", "bmw", "mercedes", "porsche", "volkswagen", "opel", "maybach", "smart", "mini"],
+    "🇯🇵 Японцы": ["toyota", "nissan", "honda", "mazda", "subaru", "lexus", "infiniti", "suzuki", "mitsubishi", "daihatsu"],
+    "🇺🇸 Американцы": ["ford", "chevrolet", "dodge", "cadillac", "tesla", "jeep", "chrysler", "hummer", "pontiac", "lincoln"],
+    "🇬🇧 Англичане": ["aston martin", "bentley", "rolls-royce", "jaguar", "land rover", "lotus", "mclaren", "mini", "rover", "triumph"],
+    "🇮🇹 Итальянцы": ["ferrari", "lamborghini", "maserati", "alfa romeo", "fiat", "lancia", "pagani", "abarth"],
+}
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -51,6 +60,17 @@ init_db()
 ALLOWED_USERS = {
     "Соловей": "2011",
 }
+
+def detect_category(title, url):
+    """Определяет категорию по названию или URL"""
+    text_to_check = (title + " " + url).lower()
+    
+    for category, brands in CAR_BRANDS.items():
+        for brand in brands:
+            if brand in text_to_check:
+                return category
+    
+    return None  # Если не определили — спросим пользователя
 
 def try_parse_avito(url):
     """
@@ -224,7 +244,6 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🇺🇸 Американцы", callback_data="folder_Американцы")],
         [InlineKeyboardButton("🇬🇧 Англичане", callback_data="folder_Англичане")],
         [InlineKeyboardButton("🇮🇹 Итальянцы", callback_data="folder_Итальянцы")],
-        [InlineKeyboardButton("🏎 Спорткары", callback_data="folder_Спорткары")],
         [InlineKeyboardButton("🗑 Сброс базы", callback_data="reset_db")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -325,7 +344,7 @@ async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.message.reply_text(
         "🔗 Отправь ссылку на авто с Авито\n\n"
-        "🤖 Я автоматически вытащу все характеристики!",
+        "🤖 Я автоматически вытащу все характеристики и определю страну!",
         parse_mode="Markdown"
     )
     await query.message.delete()
@@ -341,6 +360,8 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if context.user_data.get("awaiting_url"):
         await handle_url(update, context)
+    elif context.user_data.get("awaiting_folder_choice"):
+        await handle_folder_choice(update, context)
 
 async def handle_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_username"):
@@ -372,60 +393,91 @@ async def handle_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
-    folder = context.user_data["add_folder"]
     
     await update.message.reply_text("🔍 Парсю Авито...")
     parsed = try_parse_avito(url)
     
     if parsed:
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("""
-            INSERT INTO cars (url, title, price, year, mileage, engine, horsepower, transmission, location, photo_url, folder, date_added)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (url, parsed['title'], parsed['price'], parsed['year'], parsed['mileage'],
-              parsed['engine'], parsed['horsepower'], parsed['transmission'], parsed['location'],
-              parsed['photo_url'], folder, datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
+        # Определяем категорию
+        detected_folder = detect_category(parsed['title'], url)
         
-        msg = f"✅ Найдено:\n"
-        msg += f"🚗 {parsed['title']}\n"
-        if parsed['price']:
-            msg += f"💰 {parsed['price']}\n"
-        if parsed['year']:
-            msg += f"📅 {parsed['year']} год\n"
-        if parsed['mileage']:
-            msg += f"🛣 {parsed['mileage']}\n"
-        if parsed['engine']:
-            msg += f"⚙️ {parsed['engine']}\n"
-        if parsed['horsepower']:
-            msg += f"🐎 {parsed['horsepower']}\n"
-        if parsed['transmission']:
-            msg += f"🕹 {parsed['transmission']}\n"
-        if parsed['location']:
-            msg += f"📍 {parsed['location']}\n"
-        msg += "\n✅ Добавлено в гараж!"
-        
-        if parsed['photo_url']:
-            try:
-                img_response = requests.get(parsed['photo_url'], headers={
-                    'User-Agent': 'Mozilla/5.0',
-                    'Referer': 'https://www.avito.ru/'
-                }, timeout=10)
-                if img_response.status_code == 200:
-                    await update.message.reply_photo(photo=img_response.content, caption=msg)
-                    context.user_data["awaiting_url"] = False
-                    await show_main_menu(update, context)
-                    return
-            except:
-                pass
-        
-        await update.message.reply_text(msg)
-        context.user_data["awaiting_url"] = False
-        await show_main_menu(update, context)
+        if detected_folder:
+            # Авто-определили — сразу сохраняем
+            folder = detected_folder
+            
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO cars (url, title, price, year, mileage, engine, horsepower, transmission, location, photo_url, folder, date_added)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (url, parsed['title'], parsed['price'], parsed['year'], parsed['mileage'],
+                  parsed['engine'], parsed['horsepower'], parsed['transmission'], parsed['location'],
+                  parsed['photo_url'], folder, datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+            
+            msg = f"✅ Найдено:\n"
+            msg += f"🚗 {parsed['title']}\n"
+            if parsed['price']:
+                msg += f"💰 {parsed['price']}\n"
+            if parsed['year']:
+                msg += f"📅 {parsed['year']} год\n"
+            if parsed['mileage']:
+                msg += f"🛣 {parsed['mileage']}\n"
+            if parsed['engine']:
+                msg += f"⚙️ {parsed['engine']}\n"
+            if parsed['horsepower']:
+                msg += f"🐎 {parsed['horsepower']}\n"
+            if parsed['transmission']:
+                msg += f"🕹 {parsed['transmission']}\n"
+            if parsed['location']:
+                msg += f"📍 {parsed['location']}\n"
+            msg += f"\n📂 Авто-категория: {folder}"
+            msg += "\n✅ Добавлено в гараж!"
+            
+            if parsed['photo_url']:
+                try:
+                    img_response = requests.get(parsed['photo_url'], headers={
+                        'User-Agent': 'Mozilla/5.0',
+                        'Referer': 'https://www.avito.ru/'
+                    }, timeout=10)
+                    if img_response.status_code == 200:
+                        await update.message.reply_photo(photo=img_response.content, caption=msg)
+                        context.user_data["awaiting_url"] = False
+                        await show_main_menu(update, context)
+                        return
+                except:
+                    pass
+            
+            await update.message.reply_text(msg)
+            context.user_data["awaiting_url"] = False
+            await show_main_menu(update, context)
+        else:
+            # Не определили — сохраняем данные и спрашиваем
+            context.user_data["parsed_data"] = parsed
+            context.user_data["parsed_url"] = url
+            context.user_data["awaiting_url"] = False
+            context.user_data["awaiting_folder_choice"] = True
+            
+            keyboard = [
+                [InlineKeyboardButton("🇩🇪 Немцы", callback_data="choose_Немцы")],
+                [InlineKeyboardButton("🇯🇵 Японцы", callback_data="choose_Японцы")],
+                [InlineKeyboardButton("🇺🇸 Американцы", callback_data="choose_Американцы")],
+                [InlineKeyboardButton("🇬🇧 Англичане", callback_data="choose_Англичане")],
+                [InlineKeyboardButton("🇮🇹 Итальянцы", callback_data="choose_Итальянцы")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                f"🚗 Нашёл: {parsed['title']}\n\n"
+                "🌍 Не смог определить страну. Выбери категорию:",
+                reply_markup=reply_markup
+            )
     else:
         await update.message.reply_text("❌ Не удалось распарсить. Проверь ссылку.")
+
+async def handle_folder_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает выбор категории через колбэк"""
+    pass  # Будет обработано в button_callback
 
 async def ask_move(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -437,8 +489,7 @@ async def ask_move(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🇯🇵 Японцы", callback_data="move_to_Японцы")],
         [InlineKeyboardButton("🇺🇸 Американцы", callback_data="move_to_Американцы")],
         [InlineKeyboardButton("🇬🇧 Англичане", callback_data="move_to_Англичане")],
-        [InlineKeyboardButton("🇮🇹 Итальянцы", callback_data="move_to_Итальянцы")],
-        [InlineKeyboardButton("🏎 Спорткары", callback_data="move_to_Спорткары")]
+        [InlineKeyboardButton("🇮🇹 Итальянцы", callback_data="move_to_Итальянцы")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text("🗂 Выбери категорию:", reply_markup=reply_markup)
@@ -475,6 +526,44 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         conn.close()
         await query.edit_message_text("🗑 База очищена! Начни заново.")
+    elif data.startswith("choose_"):
+        # Пользователь выбрал категорию вручную
+        folder = data.split("_")[1]
+        parsed = context.user_data.get("parsed_data")
+        url = context.user_data.get("parsed_url")
+        
+        if parsed and url:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("""
+                INSERT INTO cars (url, title, price, year, mileage, engine, horsepower, transmission, location, photo_url, folder, date_added)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (url, parsed['title'], parsed['price'], parsed['year'], parsed['mileage'],
+                  parsed['engine'], parsed['horsepower'], parsed['transmission'], parsed['location'],
+                  parsed['photo_url'], folder, datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
+            
+            context.user_data.pop("parsed_data", None)
+            context.user_data.pop("parsed_url", None)
+            context.user_data["awaiting_folder_choice"] = False
+            
+            msg = f"✅ Добавлено в «{folder}»!\n🚗 {parsed['title']}"
+            await query.edit_message_text(msg)
+            
+            if parsed['photo_url']:
+                try:
+                    img_response = requests.get(parsed['photo_url'], headers={
+                        'User-Agent': 'Mozilla/5.0',
+                        'Referer': 'https://www.avito.ru/'
+                    }, timeout=10)
+                    if img_response.status_code == 200:
+                        await update.effective_chat.send_photo(
+                            photo=img_response.content,
+                            caption=msg
+                        )
+                except:
+                    pass
     elif data.startswith("photo_"):
         car_id = int(data.split("_")[1])
         conn = sqlite3.connect(DB_PATH)

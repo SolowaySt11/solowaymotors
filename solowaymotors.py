@@ -323,11 +323,14 @@ async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     folder = query.data.split("_")[1]
     context.user_data["add_folder"] = folder
     context.user_data["awaiting_url"] = True
-    await query.edit_message_text(
+    
+    # Отправляем новое сообщение вместо редактирования
+    await query.message.reply_text(
         "🔗 Отправь ссылку на авто с Авито\n\n"
         "🤖 Я автоматически вытащу все характеристики!",
         parse_mode="Markdown"
     )
+    await query.message.delete()
 
 async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Аутентификация

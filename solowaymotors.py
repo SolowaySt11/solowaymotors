@@ -162,17 +162,30 @@ def try_parse_avito(url):
         # ===== ФОТО =====
         photo_url = None
         
-        # Способ 1: Ищем большое фото (не лого)
+        # Способ 1: Ищем в data-атрибутах
         for img in soup.find_all('img'):
-            src = img.get('src') or img.get('data-src') or ''
-            # Фото товара обычно содержат "upload" или "image" и большие размеры
-            if ('avito' in src or 'upload' in src or 'image' in src) and not src.endswith('.svg'):
-                if 'logo' not in src.lower() and 'avatar' not in src.lower() and 'favicon' not in src.lower():
-                    if len(src) > 50:  # Обычно фото имеют длинный URL
+            for attr in ['src', 'data-src', 'data-srcset', 'data-url', 'data-image']:
+                src = img.get(attr, '')
+                if src and 'http' in src and len(src) > 50:
+                    if 'logo' not in src.lower() and 'avatar' not in src.lower() and 'favicon' not in src.lower():
                         photo_url = src
                         break
+            if photo_url:
+                break
         
-        # Способ 2: og:image (но не лого)
+        # Способ 2: Ищем в div с background-image
+        if not photo_url:
+            for div in soup.find_all('div'):
+                style = div.get('style', '')
+                bg_match = re.search(r'url\([\'"]?([^\'"]+)[\'"]?\)', style)
+                if bg_match:
+                    src = bg_match.group(1)
+                    if 'http' in src and len(src) > 50:
+                        if 'logo' not in src.lower():
+                            photo_url = src
+                            break
+        
+        # Способ 3: og:image
         if not photo_url:
             og_image = soup.find('meta', property='og:image')
             if og_image and og_image.get('content'):
@@ -180,13 +193,14 @@ def try_parse_avito(url):
                 if 'logo' not in og_img.lower() and 'avatar' not in og_img.lower():
                     photo_url = og_img
         
-        # Способ 3: Первое большое фото
+        # Способ 4: Ищем любую картинку с "image" или "photo" в URL
         if not photo_url:
             for img in soup.find_all('img'):
-                src = img.get('src') or img.get('data-src') or ''
-                if src and 'http' in src and len(src) > 50:
-                    photo_url = src
-                    break
+                src = img.get('src', '') or img.get('data-src', '')
+                if src and ('image' in src.lower() or 'photo' in src.lower() or 'upload' in src.lower()):
+                    if 'http' in src and len(src) > 50:
+                        photo_url = src
+                        break
         
         if title:
             return {
@@ -480,10 +494,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     photo=row[0],
                     caption=f"📸 {row[1]}"
                 )
-            except:
-                await query.answer("❌ Не удалось загрузить фото", show_alert=True)
+                await query.answer("📸 Фото отправлено!", show_alert=False)
+            except Exception as e:
+                await query.answer(f"❌ Ошибка загрузки фото", show_alert=True)
         else:
-            await query.answer("❌ Фото не найдено", show_alert=True)
+            await query.answer("❌ Фото не найдено в базе", show_alert=True)
     elif data.startswith("folder_"):
         folder = data.split("_", 1)[1]
         await show_car(update, context, folder, 0)

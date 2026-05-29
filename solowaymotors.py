@@ -70,7 +70,7 @@ def detect_category(title, url):
             if brand in text_to_check:
                 return category
     
-    return None  # Если не определили — спросим пользователя
+    return None
 
 def try_parse_avito(url):
     """
@@ -239,6 +239,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
+        [InlineKeyboardButton("🔗 Добавить по ссылке (авто)", callback_data="auto_add")],
         [InlineKeyboardButton("🇩🇪 Немцы", callback_data="folder_Немцы")],
         [InlineKeyboardButton("🇯🇵 Японцы", callback_data="folder_Японцы")],
         [InlineKeyboardButton("🇺🇸 Американцы", callback_data="folder_Американцы")],
@@ -250,12 +251,12 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if update.message:
         await update.message.reply_text(
-            "🏎 SOLOWAY MOTORS\n\n👇 Выбери категорию или кинь ссылку на Авито:",
+            "🏎 SOLOWAY MOTORS\n\n👇 Выбери категорию или добавь по ссылке:",
             reply_markup=reply_markup
         )
     else:
         await update.callback_query.edit_message_text(
-            "🏎 SOLOWAY MOTORS\n\n👇 Выбери категорию или кинь ссылку на Авито:",
+            "🏎 SOLOWAY MOTORS\n\n👇 Выбери категорию или добавь по ссылке:",
             reply_markup=reply_markup
         )
 
@@ -344,7 +345,7 @@ async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.message.reply_text(
         "🔗 Отправь ссылку на авто с Авито\n\n"
-        "🤖 Я автоматически вытащу все характеристики и определю страну!",
+        "🤖 Я автоматически вытащу все характеристики!",
         parse_mode="Markdown"
     )
     await query.message.delete()
@@ -360,8 +361,6 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if context.user_data.get("awaiting_url"):
         await handle_url(update, context)
-    elif context.user_data.get("awaiting_folder_choice"):
-        await handle_folder_choice(update, context)
 
 async def handle_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_username"):
@@ -393,18 +392,18 @@ async def handle_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
+    folder = context.user_data.get("add_folder")  # Может быть None
     
     await update.message.reply_text("🔍 Парсю Авито...")
     parsed = try_parse_avito(url)
     
     if parsed:
-        # Определяем категорию
-        detected_folder = detect_category(parsed['title'], url)
+        # Если папка не выбрана — определяем авто
+        if not folder:
+            folder = detect_category(parsed['title'], url)
         
-        if detected_folder:
-            # Авто-определили — сразу сохраняем
-            folder = detected_folder
-            
+        if folder:
+            # Сохраняем
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
             c.execute("""
@@ -444,6 +443,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if img_response.status_code == 200:
                         await update.message.reply_photo(photo=img_response.content, caption=msg)
                         context.user_data["awaiting_url"] = False
+                        context.user_data.pop("add_folder", None)
                         await show_main_menu(update, context)
                         return
                 except:
@@ -451,13 +451,13 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await update.message.reply_text(msg)
             context.user_data["awaiting_url"] = False
+            context.user_data.pop("add_folder", None)
             await show_main_menu(update, context)
         else:
-            # Не определили — сохраняем данные и спрашиваем
+            # Не определили — спрашиваем
             context.user_data["parsed_data"] = parsed
             context.user_data["parsed_url"] = url
             context.user_data["awaiting_url"] = False
-            context.user_data["awaiting_folder_choice"] = True
             
             keyboard = [
                 [InlineKeyboardButton("🇩🇪 Немцы", callback_data="choose_Немцы")],
@@ -474,10 +474,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     else:
         await update.message.reply_text("❌ Не удалось распарсить. Проверь ссылку.")
-
-async def handle_folder_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает выбор категории через колбэк"""
-    pass  # Будет обработано в button_callback
 
 async def ask_move(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -519,6 +515,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "noop":
         return
+    elif data == "auto_add":
+        context.user_data["add_folder"] = None  # Авто-определение
+        context.user_data["awaiting_url"] = True
+        await query.message.reply_text(
+            "🔗 Отправь ссылку на авто с Авито\n\n"
+            "🤖 Я сам определю страну и сохраню!",
+            parse_mode="Markdown"
+        )
+        await query.message.delete()
     elif data == "reset_db":
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
@@ -527,7 +532,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         await query.edit_message_text("🗑 База очищена! Начни заново.")
     elif data.startswith("choose_"):
-        # Пользователь выбрал категорию вручную
         folder = data.split("_")[1]
         parsed = context.user_data.get("parsed_data")
         url = context.user_data.get("parsed_url")
@@ -546,7 +550,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             context.user_data.pop("parsed_data", None)
             context.user_data.pop("parsed_url", None)
-            context.user_data["awaiting_folder_choice"] = False
             
             msg = f"✅ Добавлено в «{folder}»!\n🚗 {parsed['title']}"
             await query.edit_message_text(msg)

@@ -10,10 +10,7 @@ from bs4 import BeautifulSoup
 TOKEN = "8402346986:AAGp4Xgnm8i_VF9AuTLgCflcKOZ1jrfTksE"
 
 # Путь для постоянного хранения
-DB_PATH = "motors.db"
-
-# Создаём папку /data если её нет
-# .makedirs("/data", exist_ok=True)
+DB_PATH = "/data/motors.db"
 
 # ===== БАЗА МАРОК ПО СТРАНАМ =====
 CAR_BRANDS = {
@@ -25,35 +22,52 @@ CAR_BRANDS = {
 }
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS cars (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            url TEXT,
-            title TEXT,
-            price TEXT,
-            year TEXT,
-            mileage TEXT,
-            engine TEXT,
-            horsepower TEXT,
-            transmission TEXT,
-            location TEXT,
-            photo_url TEXT,
-            folder TEXT,
-            date_added TEXT
-        )
-    """)
+    # Создаём папку /data если её нет
     try:
-        c.execute("ALTER TABLE cars ADD COLUMN horsepower TEXT")
+        os.makedirs("/data", exist_ok=True)
     except:
         pass
+    
     try:
-        c.execute("ALTER TABLE cars ADD COLUMN photo_url TEXT")
-    except:
-        pass
-    conn.commit()
-    conn.close()
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS cars (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT,
+                title TEXT,
+                price TEXT,
+                year TEXT,
+                mileage TEXT,
+                engine TEXT,
+                horsepower TEXT,
+                transmission TEXT,
+                location TEXT,
+                photo_url TEXT,
+                folder TEXT,
+                date_added TEXT
+            )
+        """)
+        try:
+            c.execute("ALTER TABLE cars ADD COLUMN horsepower TEXT")
+        except:
+            pass
+        try:
+            c.execute("ALTER TABLE cars ADD COLUMN photo_url TEXT")
+        except:
+            pass
+        conn.commit()
+        print(f"✅ База создана: {DB_PATH}")
+        c.execute("SELECT COUNT(*) FROM cars")
+        count = c.fetchone()[0]
+        print(f"📊 Записей в базе: {count}")
+    except Exception as e:
+        print(f"❌ Ошибка БД: {e}")
+    finally:
+        try:
+            conn.close()
+        except:
+            pass
 
 init_db()
 
@@ -392,28 +406,36 @@ async def handle_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
-    folder = context.user_data.get("add_folder")  # Может быть None
+    folder = context.user_data.get("add_folder")
     
     await update.message.reply_text("🔍 Парсю Авито...")
     parsed = try_parse_avito(url)
     
     if parsed:
-        # Если папка не выбрана — определяем авто
         if not folder:
             folder = detect_category(parsed['title'], url)
         
         if folder:
-            # Сохраняем
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("""
-                INSERT INTO cars (url, title, price, year, mileage, engine, horsepower, transmission, location, photo_url, folder, date_added)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (url, parsed['title'], parsed['price'], parsed['year'], parsed['mileage'],
-                  parsed['engine'], parsed['horsepower'], parsed['transmission'], parsed['location'],
-                  parsed['photo_url'], folder, datetime.now().isoformat()))
-            conn.commit()
-            conn.close()
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("""
+                    INSERT INTO cars (url, title, price, year, mileage, engine, horsepower, transmission, location, photo_url, folder, date_added)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (url, parsed['title'], parsed['price'], parsed['year'], parsed['mileage'],
+                      parsed['engine'], parsed['horsepower'], parsed['transmission'], parsed['location'],
+                      parsed['photo_url'], folder, datetime.now().isoformat()))
+                conn.commit()
+                
+                # Проверяем что сохранилось
+                c.execute("SELECT COUNT(*) FROM cars")
+                count = c.fetchone()[0]
+                print(f"✅ Сохранено! Записей: {count}, папка: {folder}")
+                conn.close()
+            except Exception as e:
+                print(f"❌ Ошибка сохранения: {e}")
+                await update.message.reply_text(f"❌ Ошибка БД: {e}")
+                return
             
             msg = f"✅ Найдено:\n"
             msg += f"🚗 {parsed['title']}\n"
@@ -454,7 +476,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("add_folder", None)
             await show_main_menu(update, context)
         else:
-            # Не определили — спрашиваем
             context.user_data["parsed_data"] = parsed
             context.user_data["parsed_url"] = url
             context.user_data["awaiting_url"] = False
@@ -516,7 +537,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "noop":
         return
     elif data == "auto_add":
-        context.user_data["add_folder"] = None  # Авто-определение
+        context.user_data["add_folder"] = None
         context.user_data["awaiting_url"] = True
         await query.message.reply_text(
             "🔗 Отправь ссылку на авто с Авито\n\n"

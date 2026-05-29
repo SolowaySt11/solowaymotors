@@ -35,7 +35,6 @@ def init_db():
             date_added TEXT
         )
     """)
-    # Добавляем колонки если их нет (для старых баз)
     try:
         c.execute("ALTER TABLE cars ADD COLUMN horsepower TEXT")
     except:
@@ -74,26 +73,20 @@ def try_parse_avito(url):
         # ===== НАЗВАНИЕ =====
         title = None
         
-        # Способ 1: og:title (но фильтруем "Авито")
         og_title = soup.find('meta', property='og:title')
         if og_title and og_title.get('content'):
             og_content = og_title['content'].strip()
-            # Пропускаем если это общее название Авито
             if 'Авито' not in og_content or 'Объявления' not in og_content:
                 title = og_content
         
-        # Способ 2: Из URL (самый надёжный)
         if not title:
-            # Достаём название из URL: avito.ru/.../ferrari_california_4.3_amt_2010_...
             parts = url.split('/')
             if len(parts) > 5:
-                car_part = parts[-1].split('?')[0]  # убираем всё после ?
+                car_part = parts[-1].split('?')[0]
                 car_part = car_part.replace('_', ' ').title()
-                # Убираем ID в конце если есть
                 car_part = re.sub(r'\s+\d{10,}\s*$', '', car_part)
                 title = car_part
         
-        # Способ 3: title тег страницы
         if not title:
             title_tag = soup.find('title')
             if title_tag:
@@ -162,7 +155,6 @@ def try_parse_avito(url):
         # ===== ФОТО =====
         photo_url = None
         
-        # Способ 1: Ищем в data-атрибутах
         for img in soup.find_all('img'):
             for attr in ['src', 'data-src', 'data-srcset', 'data-url', 'data-image']:
                 src = img.get(attr, '')
@@ -173,7 +165,6 @@ def try_parse_avito(url):
             if photo_url:
                 break
         
-        # Способ 2: Ищем в div с background-image
         if not photo_url:
             for div in soup.find_all('div'):
                 style = div.get('style', '')
@@ -185,7 +176,6 @@ def try_parse_avito(url):
                             photo_url = src
                             break
         
-        # Способ 3: og:image
         if not photo_url:
             og_image = soup.find('meta', property='og:image')
             if og_image and og_image.get('content'):
@@ -193,7 +183,6 @@ def try_parse_avito(url):
                 if 'logo' not in og_img.lower() and 'avatar' not in og_img.lower():
                     photo_url = og_img
         
-        # Способ 4: Ищем любую картинку с "image" или "photo" в URL
         if not photo_url:
             for img in soup.find_all('img'):
                 src = img.get('src', '') or img.get('data-src', '')
@@ -292,6 +281,10 @@ async def show_car(update: Update, context: ContextTypes.DEFAULT_TYPE, folder, i
     if location:
         caption += f"📍 {location}\n"
 
+    # Индикатор фото
+    photo_btn_text = "📸 Фото ✅" if photo_url else "📸 Нет фото ❌"
+    photo_btn_callback = f"photo_{car_id}" if photo_url else "noop"
+
     keyboard = [
         [InlineKeyboardButton("🔗 Открыть на Авито", url=url)],
         [
@@ -301,13 +294,12 @@ async def show_car(update: Update, context: ContextTypes.DEFAULT_TYPE, folder, i
         ],
         [
             InlineKeyboardButton("➕ Добавить", callback_data=f"add_{folder}"),
-            InlineKeyboardButton("📸 Фото", callback_data=f"photo_{car_id}"),
+            InlineKeyboardButton(photo_btn_text, callback_data=photo_btn_callback),
             InlineKeyboardButton("🗑 Переместить", callback_data=f"move_{car_id}")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Всегда редактируем сообщение (не удаляем!)
     await update.callback_query.edit_message_text(
         caption,
         reply_markup=reply_markup,
@@ -331,7 +323,6 @@ async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["add_folder"] = folder
     context.user_data["awaiting_url"] = True
     
-    # Отправляем новое сообщение вместо редактирования
     await query.message.reply_text(
         "🔗 Отправь ссылку на авто с Авито\n\n"
         "🤖 Я автоматически вытащу все характеристики!",
@@ -340,7 +331,6 @@ async def start_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.delete()
 
 async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Аутентификация
     if context.user_data.get("awaiting_username") or context.user_data.get("awaiting_password"):
         await handle_auth(update, context)
         return
@@ -417,13 +407,17 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"📍 {parsed['location']}\n"
         msg += "\n✅ Добавлено в гараж!"
         
-        # Отправляем фото если есть
         if parsed['photo_url']:
             try:
-                await update.message.reply_photo(photo=parsed['photo_url'], caption=msg)
-                context.user_data["awaiting_url"] = False
-                await show_main_menu(update, context)
-                return
+                img_response = requests.get(parsed['photo_url'], headers={
+                    'User-Agent': 'Mozilla/5.0',
+                    'Referer': 'https://www.avito.ru/'
+                }, timeout=10)
+                if img_response.status_code == 200:
+                    await update.message.reply_photo(photo=img_response.content, caption=msg)
+                    context.user_data["awaiting_url"] = False
+                    await show_main_menu(update, context)
+                    return
             except:
                 pass
         
@@ -490,15 +484,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         if row and row[0]:
             try:
-                await update.effective_chat.send_photo(
-                    photo=row[0],
-                    caption=f"📸 {row[1]}"
-                )
-                await query.answer("📸 Фото отправлено!", show_alert=False)
+                img_response = requests.get(row[0], headers={
+                    'User-Agent': 'Mozilla/5.0',
+                    'Referer': 'https://www.avito.ru/'
+                }, timeout=10)
+                if img_response.status_code == 200:
+                    await update.effective_chat.send_photo(
+                        photo=img_response.content,
+                        caption=f"📸 {row[1]}"
+                    )
+                else:
+                    await query.answer("❌ Не удалось загрузить фото", show_alert=True)
             except Exception as e:
-                await query.answer(f"❌ Ошибка загрузки фото", show_alert=True)
+                await query.answer("❌ Ошибка загрузки фото", show_alert=True)
         else:
-            await query.answer("❌ Фото не найдено в базе", show_alert=True)
+            await query.answer("❌ Фото не найдено", show_alert=True)
     elif data.startswith("folder_"):
         folder = data.split("_", 1)[1]
         await show_car(update, context, folder, 0)

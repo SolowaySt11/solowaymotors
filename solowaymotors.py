@@ -373,8 +373,13 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔐 Сначала авторизуйся: /start")
         return
     
+    # ВАЖНО: сначала проверяем awaiting_url
     if context.user_data.get("awaiting_url"):
         await handle_url(update, context)
+        return  # <-- выходим
+    
+    # Если не ждём URL — показываем меню
+    await show_main_menu(update, context)
 
 async def handle_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_username"):
@@ -405,7 +410,7 @@ async def handle_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
+    url = update.message.text.strip().split('\n')[0] 
     folder = context.user_data.get("add_folder")
     
     await update.message.reply_text("🔍 Парсю Авито...")

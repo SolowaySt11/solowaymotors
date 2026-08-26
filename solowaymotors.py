@@ -7,7 +7,7 @@ import requests
 import re
 from bs4 import BeautifulSoup
 
-TOKEN = "8402346986:AAGp4Xgnm8i_VF9AuTLgCflcKOZ1jrfTksE"
+TOKEN = "8402346986:AAE10hp9qvPuBLhOqgAPJq13wGtLTdXYeTU"
 
 # Путь для постоянного хранения
 DB_PATH = "/data/motors.db"
